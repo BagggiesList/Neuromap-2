@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="de">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Neuro Map Offline</title>
+    <style>
+        body {
+            font-family: Arial, Helvetica, sans-serif;
+            margin: 0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column
+        }
+
+        .top {
+            padding: 8px;
+            background: #111;
+            color: #fff;
+            display: flex;
+            gap: 8px;
+            align-items: center
+        }
+
+        .app {
+            display: flex;
+            flex: 1
+        }
+
+        .left {
+            width: 260px;
+            padding: 12px;
+            background: #0f1724;
+            color: #e6eef6
+        }
+
+        .canvas {
+            flex: 1
+        }
+
+        #network {
+            height: 100%;
+            border: 1px solid #333
+        }
+
+        input,
+        button {
+            padding: 8px;
+            border-radius: 6px;
+            margin-top: 4px;
+            width: 100%
+        }
+
+        button.active {
+            background: #4CAF50;
+            color: white
+        }
+
+        .separator {
+            margin: 12px 0;
+            border-top: 1px solid #2a3544
+        }
+    </style>
+    <script src="https://unpkg.com/vis-network@9.1.2/standalone/umd/vis-network.min.js"></script>
+</head>
+
+<body>
+    <div class="top">
+        <span>Offline Neuro Map</span>
+    </div>
+    <div class="app">
+        <div class="left">
+            <input id="nodetext" placeholder="Neuer Knoten" />
+            <button id="addNode">Knoten hinzufügen</button>
+            <button id="addEdge">Kante verbinden</button>
+            <div class="separator"></div>
+            <button id="exportJson">Export JSON</button>
+            <input type="file" id="importJson" />
+            <div class="separator"></div>
+            <button id="stabilize">Stabilisieren</button>
+            <button id="clearAll">Alles löschen</button>
+        </div>
+        <div id="network" class="canvas"></div>
+    </div>
+    <script>
+        const nodes = new vis.DataSet([]);
+        const edges = new vis.DataSet([]);
+        const container = document.getElementById('network');
+        const data = { nodes, edges };
+        const options = {
+            interaction: { hover: true, multiselect: true },
+            nodes: { shape: 'dot', size: 18 },
+            physics: { stabilization: false },
+            manipulation: {
+                enabled: false
+            }
+        };
+        const network = new vis.Network(container, data, options);
+
+        let edgeMode = false;
+        let edgeFrom = null;
+
+        const addEdgeBtn = document.getElementById('addEdge');
+
+        document.getElementById('addNode').addEventListener('click', () => {
+            const text = document.getElementById('nodetext').value || 'Neu';
+            const node = { id: Date.now(), label: text };
+            nodes.add(node);
+            document.getElementById('nodetext').value = '';
+        });
+
+        addEdgeBtn.addEventListener('click', () => {
+            edgeMode = !edgeMode;
+            addEdgeBtn.classList.toggle('active');
+            if (edgeMode) {
+                network.addEdgeMode();
+            } else {
+                network.disableEditMode();
+                edgeFrom = null;
+            }
+        });
+
+        document.getElementById('stabilize').addEventListener('click', () => {
+            network.stabilize();
+        });
+
+        document.getElementById('clearAll').addEventListener('click', () => {
+            if (confirm('Wirklich alles löschen?')) {
+                nodes.clear();
+                edges.clear();
+            }
+        });
+
+        // Delete key handler
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Delete') {
+                const selectedNodes = network.getSelectedNodes();
+                const selectedEdges = network.getSelectedEdges();
+                nodes.remove(selectedNodes);
+                edges.remove(selectedEdges);
+            }
+        });
+
+        // Double click to edit node
+        network.on('doubleClick', params => {
+            if (params.nodes.length === 1) {
+                const nodeId = params.nodes[0];
+                const node = nodes.get(nodeId);
+                const newLabel = prompt('Neuer Text:', node.label);
+                if (newLabel !== null) {
+                    nodes.update({ id: nodeId, label: newLabel });
+                }
+            }
+        });
+
+        network.on('click', params => {
+            if (edgeMode) {
+                if (params.nodes.length === 1) {
+                    if (!edgeFrom) {
+                        edgeFrom = params.nodes[0];
+                    } else {
+                        const to = params.nodes[0];
+                        if (edgeFrom !== to) {
+                            const edge = { id: Date.now(), from: edgeFrom, to: to };
+                            edges.add(edge);
+                        }
+                        edgeFrom = null;
+                        edgeMode = false;
+                        addEdgeBtn.classList.remove('active');
+                        network.disableEditMode();
+                    }
+                }
+            }
+        });
+
+        // Save positions on drag
+        network.on('dragEnd', params => {
+            if (params.nodes && params.nodes.length) {
+                params.nodes.forEach(id => {
+                    const pos = network.getPositions([id])[id];
+                    nodes.update({ id, x: pos.x, y: pos.y });
+                });
+            }
+        });
+
+        // Export/Import with positions
+        document.getElementById('exportJson').addEventListener('click', () => {
+            const jsonStr = JSON.stringify({
+                nodes: nodes.get(),
+                edges: edges.get()
+            });
+            const blob = new Blob([jsonStr], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'neuromap.json';
+            a.click();
+            URL.revokeObjectURL(url);
+        });
+
+        document.getElementById('importJson').addEventListener('change', e => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = ev => {
+                try {
+                    const obj = JSON.parse(ev.target.result);
+                    nodes.clear();
+                    edges.clear();
+                    nodes.add(obj.nodes);
+                    edges.add(obj.edges);
+                } catch (err) {
+                    alert('Ungültige JSON-Datei');
+                }
+            };
+            reader.readAsText(file);
+        });
+    </script>
+</body>
+
+</html>
